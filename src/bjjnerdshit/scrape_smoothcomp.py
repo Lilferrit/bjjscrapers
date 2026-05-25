@@ -35,6 +35,7 @@ from typing import Optional
 
 import platformdirs
 import polars as pl
+import pyarrow.parquet as pq
 import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
@@ -954,28 +955,37 @@ def main() -> None:
         file=sys.stderr,
     )
 
-    # Phase 2: scrape matches for each event
-    all_rows: list[dict] = []
-    for event_info in tqdm(events, desc="Events", file=sys.stderr):
-        all_rows.extend(_fetch_event_matches(session, event_info))
+    # Phase 2: scrape matches for each event, streaming to parquet
+    total_rows = 0
+    year_counts: dict[int, int] = {}
+    arrow_schema = build_dataframe([]).to_arrow().schema
 
-    logger.info("Total rows: %d", len(all_rows))
-    if not all_rows:
+    with pq.ParquetWriter(out_parquet, arrow_schema, compression="zstd") as writer:
+        for event_info in tqdm(events, desc="Events", file=sys.stderr):
+            rows = _fetch_event_matches(session, event_info)
+            if not rows:
+                continue
+            df = build_dataframe(rows)
+            df = _infer_absolute_fields(df)
+            writer.write_table(df.to_arrow())
+            total_rows += len(df)
+            year = event_info.get("event_year")
+            if year is not None:
+                year_counts[year] = year_counts.get(year, 0) + len(df)
+            logger.info("event %s: wrote %d rows", event_info["event_id"], len(df))
+
+    logger.info("Total rows: %d", total_rows)
+    if total_rows == 0:
         tqdm.write("No match data collected.", file=sys.stderr)
         logger.warning("No match rows.")
         sys.exit(1)
 
-    df = build_dataframe(all_rows)
-    df = _infer_absolute_fields(df)
-    df.write_parquet(out_parquet, compression="zstd")
-
-    msg = f"Written → {out_parquet}  ({len(df):,} rows × {df.shape[1]} columns)"
+    msg = f"Written → {out_parquet}  ({total_rows:,} rows × {len(_SCHEMA)} columns)"
     logger.info(msg)
     tqdm.write(msg, file=sys.stderr)
 
-    by_year = df.group_by("event_year").len().sort("event_year")
-    for row in by_year.iter_rows(named=True):
-        line = f"  {row['event_year']}: {row['len']:,} rows"
+    for year in sorted(year_counts):
+        line = f"  {year}: {year_counts[year]:,} rows"
         logger.info(line)
         tqdm.write(line, file=sys.stderr)
 
