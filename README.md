@@ -23,8 +23,8 @@ Two data sources:
 - **bjjcompsystem.com** — live bracket data for active/recent tournaments; yields full per-match rows with scores, duration, and result method
 
 ```bash
-ibjjf-absolute --min-year 2022
-ibjjf-absolute --min-year 2020 --max-year 2023 --gi gi --gender male --output ibjjf_male_gi
+scrape-ibjjf-absolute --min-year 2022
+scrape-ibjjf-absolute --min-year 2020 --max-year 2023 --gi gi --gender male --output ibjjf_male_gi
 ```
 
 #### ibjjf-absolute options
@@ -54,9 +54,9 @@ ibjjf-absolute --min-year 2020 --max-year 2023 --gi gi --gender male --output ib
 Scrapes every match (all weight classes and divisions) from BJJ events on Smoothcomp. Discovers events by probing numeric event IDs, then paginates through match lists. Discovered IDs are cached at `~/.smoothcomp_cache.json` so subsequent runs are fast.
 
 ```bash
-smoothcomp-bjj --min-year 2024
-smoothcomp-bjj --min-year 2023 --max-year 2024 --output sc_2023_2024
-smoothcomp-bjj --min-year 2025 --max-id 21600 --max-probe 10 --output test_run
+scrape-smoothcomp --min-year 2024
+scrape-smoothcomp --min-year 2023 --max-year 2024 --output sc_2023_2024
+scrape-smoothcomp --min-year 2025 --max-id 21600 --max-probe 10 --output test_run
 ```
 
 #### smoothcomp-bjj options
@@ -69,6 +69,7 @@ smoothcomp-bjj --min-year 2025 --max-id 21600 --max-probe 10 --output test_run
 | `--max-id` | 25000 | Starting event ID; probes downward from here |
 | `--max-probe` | 500 | Stop after N consecutive out-of-range/non-BJJ events |
 | `--sport-filter` | `bjj` | Keyword matched against event name; `""` to include all sports |
+| `--max-events` | no limit | Cap number of events scraped; useful for test runs |
 | `--no-cache` | off | Ignore cached event discovery; re-probe from scratch |
 | `--slow` | off | 5 s delay between requests |
 | `--retries` | 3 | HTTP retry attempts |
@@ -108,11 +109,6 @@ Both scrapers write a local JSON cache to avoid re-fetching event metadata:
 | Scraper | Cache path |
 | ------- | ---------- |
 | `ibjjf-absolute` | `~/.bjjnerdshit_cache.json` |
-| `smoothcomp-bjj` | `~/.smoothcomp_cache.json` |
+| `smoothcomp-bjj` | macOS: `~/Library/Caches/bjjnerdshit/smoothcomp_cache.json` · Linux: `~/.cache/bjjnerdshit/smoothcomp_cache.json` |
 
 Pass `--no-cache` to force a full re-probe.
-
-## TODO
-
-- [ ] use the cache dir instead of the home dir for cache stuff
-- [ ] add a `max_events` arg to the smoothcomp scraper

@@ -30,13 +30,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import platformdirs
 import polars as pl
 import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 SMOOTHCOMP_BASE = "https://smoothcomp.com"
-CACHE_PATH = Path.home() / ".smoothcomp_cache.json"
+CACHE_PATH = Path(platformdirs.user_cache_dir("bjjnerdshit")) / "smoothcomp_cache.json"
 
 NOGI_KEYWORDS = {"no-gi", "no gi", "nogi", "no kimono", "submission only"}
 
@@ -203,6 +204,7 @@ def load_cache() -> dict:
 
 def save_cache(cache: dict) -> None:
     try:
+        CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(CACHE_PATH, "w") as f:
             json.dump(cache, f, indent=2)
     except OSError as exc:
@@ -803,7 +805,7 @@ def main() -> None:
             "Scrape Smoothcomp match results → Parquet.\n\n"
             "Probes event IDs starting from --max-id (default 25000) downward,\n"
             "collecting all matches from events in [--min-year, --max-year].\n"
-            "Discovered event IDs are cached to ~/.smoothcomp_cache.json.\n\n"
+            f"Discovered event IDs are cached to {CACHE_PATH}.\n\n"
             "First run is slow (up to --max-id HTTP requests); subsequent runs\n"
             "reuse the cache and only fetch matchlist pages for new events.\n\n"
             "Weigh-in (measured) weight is not available without authentication."
@@ -869,6 +871,12 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--max-events",
+        type=int,
+        default=None,
+        help="Cap the number of events scraped (default: no limit). Useful for test runs.",
+    )
+    parser.add_argument(
         "--no-cache",
         action="store_true",
         help="Ignore cached event discovery; re-probe all IDs from scratch.",
@@ -914,6 +922,13 @@ def main() -> None:
         )
         logger.warning("No events found.")
         sys.exit(1)
+
+    if args.max_events is not None and len(events) > args.max_events:
+        tqdm.write(
+            f"Capping to {args.max_events} of {len(events)} event(s) (--max-events).",
+            file=sys.stderr,
+        )
+        events = events[: args.max_events]
 
     tqdm.write(
         f"Found {len(events)} event(s). Phase 2: scraping matches…",

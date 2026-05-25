@@ -11,14 +11,15 @@ dependencies = [
     "requests",
     "beautifulsoup4",
     "lxml",
+    "platformdirs",
     "polars",
     "tqdm",
 ]
 
 [project.scripts]
 bjjnerdshit = "bjjnerdshit:main"
-ibjjf-absolute = "bjjnerdshit.scrape_ibjjf_absolute:main"
-smoothcomp-bjj = "bjjnerdshit.scrape_smoothcomp:main"
+scrape-ibjjf-absolute = "bjjnerdshit.scrape_ibjjf_absolute:main"
+scrape-smoothcomp = "bjjnerdshit.scrape_smoothcomp:main"
 
 [build-system]
 requires = ["hatchling"]
