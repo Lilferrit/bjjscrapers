@@ -5,7 +5,10 @@ Smoothcomp Match Scraper
 Produces one Parquet row per completed match for BJJ events on smoothcomp.com
 within a given year range.
 
-Data comes from the server-rendered matchlist pages:
+Event discovery uses the paginated past-events listing:
+    /en/events/past?sport=bjj&page=N  (40 events/page, sorted newest-first)
+
+Match data comes from the server-rendered matchlist pages:
     /en/event/{id}/schedule/matchlist?page=N
 
 Category headers encode belt, weight class, age division, and gi/no-gi.
@@ -17,7 +20,7 @@ Note: Weigh-in (measured) weight is NOT available without authentication.
 Usage:
     smoothcomp-bjj --min-year 2023
     smoothcomp-bjj --min-year 2022 --max-year 2023 --output matches_2022_2023
-    smoothcomp-bjj --min-year 2025 --max-id 21600 --max-probe 10 --output test_run
+    smoothcomp-bjj --min-year 2025 --max-events 10 --output test_run
 """
 
 import argparse
@@ -215,10 +218,6 @@ def save_cache(cache: dict) -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
-
-def _extract_year(text: str) -> Optional[int]:
-    m = re.search(r"\b(20\d{2})\b", text)
-    return int(m.group(1)) if m else None
 
 
 def _is_nogi(text: str) -> bool:
@@ -505,67 +504,81 @@ def _count_pages(html: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Event info and match fetching
+# Listing page parser (event discovery)
 # ---------------------------------------------------------------------------
 
+def _format_listing_date(startdate: str, enddate: str) -> str:
+    try:
+        start = datetime.strptime(startdate, "%Y-%m-%d")
+        end = datetime.strptime(enddate, "%Y-%m-%d") if enddate else start
+        if start == end:
+            return start.strftime("%-d %b %Y")
+        if start.month == end.month and start.year == end.year:
+            return f"{start.day}-{end.strftime('%-d %b %Y')}"
+        return f"{start.strftime('%-d %b')} - {end.strftime('%-d %b %Y')}"
+    except ValueError:
+        return startdate
 
-def _fetch_event_info(session: RateLimitedSession, event_id: int) -> Optional[dict]:
-    """
-    Fetch /en/event/{id} and return metadata dict.
-    Returns None if the event doesn't exist (404).
-    """
-    url = f"{SMOOTHCOMP_BASE}/en/event/{event_id}"
-    resp = session.get(url)
-    if resp is None:
-        return None
 
-    soup = BeautifulSoup(resp.text, "lxml")
-    name = ""
+def _parse_listing_page(html: str) -> list[dict]:
+    """Extract event_info dicts from the var events array embedded in a listing page."""
+    marker = "var events = ["
+    idx = html.find(marker)
+    if idx < 0:
+        return []
+    start = idx + len(marker) - 1  # points at '['
+    depth = 0
+    in_str = False
+    esc = False
+    end = -1
+    for j in range(start, len(html)):
+        c = html[j]
+        if esc:
+            esc = False
+            continue
+        if c == "\\" and in_str:
+            esc = True
+            continue
+        if c == '"' and not esc:
+            in_str = not in_str
+            continue
+        if not in_str:
+            if c == "[":
+                depth += 1
+            elif c == "]":
+                depth -= 1
+                if depth == 0:
+                    end = j
+                    break
+    if end < 0:
+        return []
+    try:
+        items = json.loads(html[start : end + 1])
+    except json.JSONDecodeError:
+        return []
+    result = []
+    for item in items:
+        event_id = item.get("id")
+        if not event_id:
+            continue
+        startdate = item.get("startdate", "")
+        year = int(startdate[:4]) if len(startdate) >= 4 else None
+        result.append(
+            {
+                "event_id": str(event_id),
+                "event_name": item.get("title", f"event_{event_id}"),
+                "event_year": year,
+                "event_date": _format_listing_date(
+                    startdate, item.get("enddate", "")
+                ),
+            }
+        )
+    return result
 
-    # og:title is most reliable; strip "- Smoothcomp" suffix
-    og = soup.find("meta", {"property": "og:title"})
-    if og and og.get("content"):
-        name = re.sub(r"\s*[-|]\s*[Ss]moothcomp.*$", "", og["content"]).strip()
 
-    if not name:
-        title_el = soup.find("title")
-        if title_el:
-            name = re.sub(
-                r"\s*[-|]\s*[Ss]moothcomp.*$", "", title_el.get_text(strip=True)
-            ).strip()
-
-    if not name:
-        h1 = soup.find("h1")
-        if h1:
-            name = h1.get_text(strip=True)
-
-    if not name:
-        name = f"event_{event_id}"
-        logger.debug("could not extract name for event %d", event_id)
-
-    year = _extract_year(name)
-    if not year:
-        year = _extract_year(soup.get_text())
-
-    date_str = ""
-    # Normalize whitespace before searching for date patterns
-    page_text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))
-    for pat in (
-        r"\d{1,2}\s+\w{3,9}\s*[-–]\s*\d{1,2}\s+\w{3,9}\s+\d{4}",
-        r"\d{1,2}\s+\w{3,9}\s+\d{4}",
-        r"\d{1,2}\s+\w{3}\s*[-–]\s*\d{1,2}\s+\w{3}",
-    ):
-        dm = re.search(pat, page_text)
-        if dm:
-            date_str = re.sub(r"\s+", " ", dm.group(0)).strip()
-            break
-
-    return {
-        "event_id": str(event_id),
-        "event_name": name,
-        "event_year": year,
-        "event_date": date_str,
-    }
+# ---------------------------------------------------------------------------
+# Match fetching
+# ---------------------------------------------------------------------------
 
 
 def _fetch_event_matches(
@@ -614,78 +627,88 @@ def _discover_events(
     session: RateLimitedSession,
     min_year: int,
     max_year: int,
-    max_id: int,
     max_probe: int,
     sport_filter: str,
     cache: dict,
     max_events: Optional[int] = None,
 ) -> list[dict]:
     """
-    Probe event IDs from max_id downward to find events in [min_year, max_year].
+    Page through /en/events/past to find events in [min_year, max_year].
 
-    Stops after max_probe consecutive IDs with year < min_year - 1 (well before
-    the target range), to avoid scanning the entire ID history.
+    Events are returned newest-first by the listing, so once max_probe
+    consecutive events older than min_year-1 are seen, discovery stops.
     Stops early once max_events matching events are found.
-    All probed IDs are cached in cache['events'] to speed up subsequent runs.
+    All discovered event metadata is cached in cache['events'].
     """
     events_cache = cache.setdefault("events", {})
     found: list[dict] = []
     consecutive_old = 0
+    page = 1
 
-    pbar = tqdm(desc="Discovering events", unit="id", file=sys.stderr)
+    pbar = tqdm(desc="Discovering events", unit="event", file=sys.stderr)
 
-    for event_id in range(max_id, 0, -1):
-        pbar.update(1)
-        key = str(event_id)
+    while True:
+        params = f"?sport={sport_filter.lower()}&page={page}" if sport_filter else f"?page={page}"
+        resp = session.get(f"{SMOOTHCOMP_BASE}/en/events/past{params}")
+        if resp is None:
+            break
 
-        if key in events_cache:
-            info = events_cache[key]
-        else:
-            info = _fetch_event_info(session, event_id)
-            events_cache[key] = info
-            if len(events_cache) % 50 == 0:
-                save_cache(cache)
+        page_events = _parse_listing_page(resp.text)
+        if not page_events:
+            break
 
-        if info is None:
-            # 404 — event doesn't exist, doesn't affect age counter
-            continue
+        for info in page_events:
+            pbar.update(1)
+            key = info["event_id"]
 
-        year = info.get("event_year")
-        name = info.get("event_name", "")
+            if key not in events_cache:
+                events_cache[key] = info
+                if len(events_cache) % 50 == 0:
+                    save_cache(cache)
 
-        if year is None:
-            logger.debug(
-                "event %d: no year found in %r — skipping", event_id, name[:60]
-            )
-            continue
+            year = info.get("event_year")
+            name = info.get("event_name", "")
 
-        # Count how far back we've gone; stop if too old
-        if year < min_year - 1:
-            consecutive_old += 1
-            if consecutive_old >= max_probe:
-                logger.info(
-                    "Stopping discovery: %d consecutive events before %d",
-                    max_probe,
-                    min_year - 1,
-                )
-                break
-            continue
-        else:
-            consecutive_old = 0
+            if year is None:
+                logger.debug("event %s: no year found — skipping", key)
+                continue
 
-        # Apply sport keyword filter on event name
-        if sport_filter and sport_filter.lower() not in name.lower():
-            continue
+            if year < min_year - 1:
+                consecutive_old += 1
+                if consecutive_old >= max_probe:
+                    logger.info(
+                        "Stopping discovery: %d consecutive events before %d",
+                        max_probe,
+                        min_year - 1,
+                    )
+                    pbar.close()
+                    save_cache(cache)
+                    tqdm.write(
+                        f"Discovery complete: {len(found)} event(s) in [{min_year}–{max_year}]",
+                        file=sys.stderr,
+                    )
+                    return found
+                continue
+            else:
+                consecutive_old = 0
 
-        if min_year <= year <= max_year:
-            found.append(info)
-            pbar.set_postfix(found=len(found))
-            logger.info("event %d: %s (%d) — adding", event_id, name, year)
-            if max_events is not None and len(found) >= max_events:
-                logger.info(
-                    "Stopping discovery: reached --max-events limit (%d)", max_events
-                )
-                break
+            if min_year <= year <= max_year:
+                found.append(info)
+                pbar.set_postfix(found=len(found))
+                logger.info("event %s: %s (%d) — adding", key, name, year)
+                if max_events is not None and len(found) >= max_events:
+                    logger.info(
+                        "Stopping discovery: reached --max-events limit (%d)", max_events
+                    )
+                    pbar.close()
+                    save_cache(cache)
+                    tqdm.write(
+                        f"Discovery complete: {len(found)} event(s) in [{min_year}–{max_year}]",
+                        file=sys.stderr,
+                    )
+                    return found
+
+        page += 1
 
     pbar.close()
     save_cache(cache)
@@ -810,11 +833,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Scrape Smoothcomp match results → Parquet.\n\n"
-            "Probes event IDs starting from --max-id (default 25000) downward,\n"
-            "collecting all matches from events in [--min-year, --max-year].\n"
-            f"Discovered event IDs are cached to {CACHE_PATH}.\n\n"
-            "First run is slow (up to --max-id HTTP requests); subsequent runs\n"
-            "reuse the cache and only fetch matchlist pages for new events.\n\n"
+            "Pages through smoothcomp.com/en/events/past to find events in\n"
+            "[--min-year, --max-year], then scrapes match data for each.\n"
+            f"Discovered event metadata is cached to {CACHE_PATH}.\n\n"
             "Weigh-in (measured) weight is not available without authentication."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -840,9 +861,10 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--slow",
-        action="store_true",
-        help="5 s delay between requests (default: 1 s).",
+        "--delay",
+        type=float,
+        default=10.0,
+        help="Seconds between HTTP requests (default: 10). Values below 10 trigger a warning.",
     )
     parser.add_argument(
         "--retries",
@@ -851,30 +873,21 @@ def main() -> None:
         help="HTTP retry attempts (default: 3).",
     )
     parser.add_argument(
-        "--max-id",
-        type=int,
-        default=25000,
-        help=(
-            "Starting event ID for discovery — probe downward from here "
-            "(default: 25000). Lower this to narrow the search range."
-        ),
-    )
-    parser.add_argument(
         "--max-probe",
         type=int,
-        default=500,
+        default=80,
         help=(
-            "Stop after this many consecutive events with year < min-year − 1 "
-            "(default: 500). Lower values speed up search at the cost of possibly "
-            "missing sporadic late-submitted events."
+            "Stop after this many consecutive events older than min-year−1 "
+            "(default: 80). Events are date-sorted on the listing page, so "
+            "this threshold is crossed quickly once past the target range."
         ),
     )
     parser.add_argument(
         "--sport-filter",
         default="bjj",
         help=(
-            "Case-insensitive keyword to match in event names (default: 'bjj'). "
-            "Pass an empty string to include all sports."
+            "Sport slug passed as ?sport= to the past-events listing "
+            "(default: 'bjj'). Pass an empty string to include all sports."
         ),
     )
     parser.add_argument(
@@ -886,7 +899,7 @@ def main() -> None:
     parser.add_argument(
         "--no-cache",
         action="store_true",
-        help="Ignore cached event discovery; re-probe all IDs from scratch.",
+        help="Ignore cached event metadata; re-fetch all listing pages.",
     )
     args = parser.parse_args()
 
@@ -896,17 +909,24 @@ def main() -> None:
 
     _setup_logging(out_log)
     logger.info(
-        "Starting: min_year=%d max_year=%d sport_filter=%r max_id=%d max_probe=%d",
+        "Starting: min_year=%d max_year=%d sport_filter=%r max_probe=%d delay=%.1fs",
         args.min_year,
         args.max_year,
         args.sport_filter,
-        args.max_id,
         args.max_probe,
+        args.delay,
     )
     tqdm.write(f"Logging to {out_log}", file=sys.stderr)
 
-    delay = 5.0 if args.slow else 1.0
-    session = RateLimitedSession(delay=delay, retries=args.retries)
+    if args.delay < 10.0:
+        msg = (
+            f"--delay {args.delay}s is below the recommended 10 s minimum — are you"
+            " fr just going to disrespect their robots.txt like that? 😤😤😤"
+        )
+        logger.warning(msg)
+        tqdm.write(f"WARNING: {msg}", file=sys.stderr)
+
+    session = RateLimitedSession(delay=args.delay, retries=args.retries)
     cache = {} if args.no_cache else load_cache()
 
     # Phase 1: discover events
@@ -915,7 +935,6 @@ def main() -> None:
         session,
         min_year=args.min_year,
         max_year=args.max_year,
-        max_id=args.max_id,
         max_probe=args.max_probe,
         sport_filter=args.sport_filter,
         cache=cache,
@@ -924,8 +943,7 @@ def main() -> None:
 
     if not events:
         tqdm.write(
-            "No events found. Try --no-cache, a higher --max-id, "
-            "a wider year range, or a different --sport-filter.",
+            "No events found. Try --no-cache, a wider year range, or a different --sport-filter.",
             file=sys.stderr,
         )
         logger.warning("No events found.")
