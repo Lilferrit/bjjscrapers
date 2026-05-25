@@ -1,0 +1,31 @@
+[project]
+name = "bjjnerdshit"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { email = "gwenneth.straub@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "requests",
+    "beautifulsoup4",
+    "lxml",
+    "polars",
+    "tqdm",
+]
+
+[project.scripts]
+bjjnerdshit = "bjjnerdshit:main"
+ibjjf-absolute = "bjjnerdshit.scrape_ibjjf_absolute:main"
+smoothcomp-bjj = "bjjnerdshit.scrape_smoothcomp:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "isort>=8.0.1",
+    "ruff>=0.15.14",
+]
