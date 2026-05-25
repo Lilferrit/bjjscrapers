@@ -31,6 +31,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+import platformdirs
 import polars as pl
 import requests
 from bs4 import BeautifulSoup
@@ -39,7 +40,7 @@ from tqdm import tqdm
 BJJCOMP_BASE = "https://www.bjjcompsystem.com"
 IBJJF_RESULTS_URL = "https://ibjjf.com/events/results"
 IBJJFDB_BASE = "https://www.ibjjfdb.com"
-CACHE_PATH = Path.home() / ".bjjnerdshit_cache.json"
+CACHE_PATH = Path(platformdirs.user_cache_dir("bjjnerdshit")) / "ibjjf_cache.json"
 
 NOGI_KEYWORDS = {"no-gi", "no gi", "nogi", "sem kimono", "submission only"}
 
@@ -194,6 +195,7 @@ def load_cache() -> dict:
 
 def save_cache(cache: dict) -> None:
     try:
+        CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(CACHE_PATH, "w") as f:
             json.dump(cache, f, indent=2)
     except OSError as exc:

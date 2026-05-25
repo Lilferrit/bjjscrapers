@@ -108,7 +108,7 @@ Both scrapers write a local JSON cache to avoid re-fetching event metadata:
 
 | Scraper | Cache path |
 | ------- | ---------- |
-| `ibjjf-absolute` | `~/.bjjnerdshit_cache.json` |
-| `smoothcomp-bjj` | macOS: `~/Library/Caches/bjjnerdshit/smoothcomp_cache.json` · Linux: `~/.cache/bjjnerdshit/smoothcomp_cache.json` |
+| `scrape-ibjjf-absolute` | macOS: `~/Library/Caches/bjjnerdshit/ibjjf_cache.json` · Linux: `~/.cache/bjjnerdshit/ibjjf_cache.json` |
+| `scrape-smoothcomp` | macOS: `~/Library/Caches/bjjnerdshit/smoothcomp_cache.json` · Linux: `~/.cache/bjjnerdshit/smoothcomp_cache.json` |
 
 Pass `--no-cache` to force a full re-probe.

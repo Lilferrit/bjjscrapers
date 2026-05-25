@@ -618,12 +618,14 @@ def _discover_events(
     max_probe: int,
     sport_filter: str,
     cache: dict,
+    max_events: Optional[int] = None,
 ) -> list[dict]:
     """
     Probe event IDs from max_id downward to find events in [min_year, max_year].
 
     Stops after max_probe consecutive IDs with year < min_year - 1 (well before
     the target range), to avoid scanning the entire ID history.
+    Stops early once max_events matching events are found.
     All probed IDs are cached in cache['events'] to speed up subsequent runs.
     """
     events_cache = cache.setdefault("events", {})
@@ -679,6 +681,11 @@ def _discover_events(
             found.append(info)
             pbar.set_postfix(found=len(found))
             logger.info("event %d: %s (%d) — adding", event_id, name, year)
+            if max_events is not None and len(found) >= max_events:
+                logger.info(
+                    "Stopping discovery: reached --max-events limit (%d)", max_events
+                )
+                break
 
     pbar.close()
     save_cache(cache)
@@ -912,6 +919,7 @@ def main() -> None:
         max_probe=args.max_probe,
         sport_filter=args.sport_filter,
         cache=cache,
+        max_events=args.max_events,
     )
 
     if not events:
@@ -922,13 +930,6 @@ def main() -> None:
         )
         logger.warning("No events found.")
         sys.exit(1)
-
-    if args.max_events is not None and len(events) > args.max_events:
-        tqdm.write(
-            f"Capping to {args.max_events} of {len(events)} event(s) (--max-events).",
-            file=sys.stderr,
-        )
-        events = events[: args.max_events]
 
     tqdm.write(
         f"Found {len(events)} event(s). Phase 2: scraping matches…",
