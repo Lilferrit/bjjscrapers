@@ -9,6 +9,12 @@ uv sync
 uv pip install -e .
 ```
 
+## Run Tests
+
+```
+hahahah you thought
+```
+
 ## Scrapers
 
 ### `ibjjf-absolute` — IBJJF Absolute Bracket Results
