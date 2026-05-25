@@ -1,4 +1,4 @@
-# bjjnerdshit
+# bjjscrapers
 
 Tools for scraping BJJ competition match data into analysis-ready Parquet files.
 
